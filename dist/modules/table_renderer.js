@@ -56,6 +56,55 @@ function buildHeaderTitle(runtime) {
   return journal ? `Таблиця: ${journal.title}` : 'Таблиця';
 }
 
+function getRuntimeState(runtime) {
+  if (runtime?.api?.getState) return runtime.api.getState();
+  if (runtime?.sdo?.api?.getState) return runtime.sdo.api.getState();
+  return null;
+}
+
+function getJournalTemplatesApi(runtime) {
+  return runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
+}
+
+async function ensureJournalTemplateId(runtime, state, journal, journalTemplatesApi) {
+  let templateId = journal?.templateId;
+  if (!journal || templateId || typeof journalTemplatesApi?.listTemplateEntities !== 'function') {
+    return templateId;
+  }
+
+  const list = await journalTemplatesApi.listTemplateEntities();
+  const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
+  if (!defaultTplId) return null;
+
+  templateId = defaultTplId;
+  if (typeof runtime?.sdo?.commit === 'function') {
+    await runtime.sdo.commit((next) => {
+      next.journals = (next.journals ?? []).map((item) => (
+        item.id === journal.id ? { ...item, templateId: defaultTplId } : item
+      ));
+    }, ['journals_nodes_v2']);
+  }
+
+  return templateId;
+}
+
+async function ensureActiveJournal(runtime, state) {
+  if (state?.activeJournalId || !state?.activeSpaceId || !Array.isArray(state?.journals) || state.journals.length === 0) {
+    return state;
+  }
+
+  const candidate = state.journals.find((journal) => (
+    journal.spaceId === state.activeSpaceId && journal.parentId === state.activeSpaceId
+  ));
+  if (!candidate || typeof runtime?.sdo?.commit !== 'function') return state;
+
+  await runtime.sdo.commit((next) => {
+    next.activeJournalId = candidate.id;
+  }, ['nav_last_loc_v2']);
+
+  return getRuntimeState(runtime);
+}
+
 export function createTableRendererModule(opts = {}) {
   const {
     // legacy/fallback single-dataset key (used only when tableStore module is not present)
@@ -83,64 +132,21 @@ export function createTableRendererModule(opts = {}) {
   }
 
   async function resolveSchema(runtime) {
-    const state = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
-    const journalId = state?.activeJournalId;
-    // Auto-select: if no active journal but there are journals in the active space, pick the first root journal.
-    if (!journalId && state?.activeSpaceId && Array.isArray(state?.journals) && state.journals.length) {
-      const candidate = state.journals.find((j) => j.spaceId === state.activeSpaceId && j.parentId === state.activeSpaceId);
-      if (candidate && typeof runtime?.sdo?.commit === 'function') {
-        await runtime.sdo.commit((next) => { next.activeJournalId = candidate.id; }, ['nav_last_loc_v2']);
-        // refresh state snapshot after commit
-        const st2 = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
-        const j2 = (st2?.journals ?? []).find((j) => j.id === st2?.activeJournalId);
-        // continue resolving with the updated journal/state
-        return await (async () => {
-          const journal = j2;
-          let templateId = journal?.templateId;
-          const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
-          if (!jt?.getTemplate) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state: st2 };
+    const initialState = getRuntimeState(runtime);
+    const state = await ensureActiveJournal(runtime, initialState);
+    const journal = (state?.journals ?? []).find((item) => item.id === state?.activeJournalId);
 
-          if (journal && !templateId) {
-            const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
-            const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
-            if (defaultTplId) {
-              templateId = defaultTplId;
-              await runtime.sdo.commit((next) => {
-                next.journals = (next.journals ?? []).map((j) => (j.id === journal.id ? { ...j, templateId: defaultTplId } : j));
-              }, ['journals_nodes_v2']);
-            }
-          }
-
-          if (!templateId) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state: st2 };
-          const template = await jt.getTemplate(templateId);
-          return { schema: schemaFromTemplate(template), journal, state: st2 };
-        })();
-      }
+    const journalTemplatesApi = getJournalTemplatesApi(runtime);
+    if (!journalTemplatesApi?.getTemplate) {
+      return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
     }
 
-    const journal = (state?.journals ?? []).find((j) => j.id === journalId);
-    let templateId = journal?.templateId;
-
-    const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
-    if (!jt?.getTemplate) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
-
-    // Auto-heal: if journal exists but has no templateId, assign default (prefer "test")
-    if (journal && !templateId) {
-      const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
-      const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
-      if (defaultTplId) {
-        templateId = defaultTplId;
-        if (typeof runtime?.sdo?.commit === 'function') {
-          await runtime.sdo.commit((next) => {
-            next.journals = (next.journals ?? []).map((j) => (j.id === journal.id ? { ...j, templateId: defaultTplId } : j));
-          }, ['journals_nodes_v2']);
-        }
-      }
+    const templateId = await ensureJournalTemplateId(runtime, state, journal, journalTemplatesApi);
+    if (!templateId) {
+      return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
     }
 
-    if (!templateId) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
-
-    const template = await jt.getTemplate(templateId);
+    const template = await journalTemplatesApi.getTemplate(templateId);
     return { schema: schemaFromTemplate(template), journal, state };
   }
 
@@ -159,12 +165,14 @@ export function createTableRendererModule(opts = {}) {
       const ds = await store.getDataset(journalId);
       return normalizeDataset({ records: ds.records ?? [], merges: ds.merges ?? [] });
     }
+    // fallback single-dataset storage
     return normalizeDataset((await storage.get(datasetKey)) ?? { records: [], merges: [] });
   }
 
   async function saveDataset(runtime, storage, journalId, dataset) {
     const store = runtime?.api?.tableStore || runtime?.sdo?.api?.tableStore;
     if (store?.upsertRecords && journalId) {
+      // Replace records for now (renderer owns ordering)
       await store.upsertRecords(journalId, dataset.records ?? [], 'replace');
       return;
     }
@@ -178,162 +186,23 @@ export function createTableRendererModule(opts = {}) {
     return () => {};
   }
 
-  function openAddModal({ fields, onSubmit, onCancel }) {
-    // Overlay
+  function createModal() {
     const overlay = document.createElement('div');
-    overlay.className = 'sdo-add-modal-overlay';
-    overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
+    overlay.style.position = 'fixed';
+    overlay.style.inset = '0';
+    overlay.style.background = 'rgba(0,0,0,.35)';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
 
-    // Window
-    const win = document.createElement('div');
-    win.className = 'sdo-add-modal-window';
+    const modal = document.createElement('div');
+    modal.style.background = '#fff';
+    modal.style.padding = '12px';
+    modal.style.borderRadius = '8px';
+    modal.style.minWidth = '360px';
 
-    // Body (scroll only inside)
-    const body = document.createElement('div');
-    body.className = 'sdo-add-modal-body';
-
-    const form = document.createElement('form');
-    form.className = 'sdo-add-modal-form';
-    form.addEventListener('submit', (ev) => ev.preventDefault());
-
-    const values = {};
-    const inputs = [];
-
-    const todayUA = (() => {
-      try {
-        const d = new Date();
-        const dd = String(d.getDate()).padStart(2, '0');
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const yyyy = String(d.getFullYear());
-        return `${dd}.${mm}.${yyyy}`;
-      } catch {
-        return '';
-      }
-    })();
-
-    for (const field of fields) {
-      const row = document.createElement('div');
-      row.className = 'sdo-add-modal-row';
-
-      const label = document.createElement('label');
-      label.className = 'sdo-add-modal-label';
-      label.textContent = `${field.label}${field.required ? ' (обов\'язково)' : ''}`;
-
-      const input = document.createElement('input');
-      input.className = 'sdo-add-modal-input';
-      input.type = 'text';
-
-      // Heuristics for placeholders (until template columns carry explicit types)
-      const lbl = String(field.label ?? '').toLowerCase();
-      const wantsDigits = /номер|кількість|к-сть|№/.test(lbl);
-      const wantsDate = /дата/.test(lbl);
-      if (wantsDigits) {
-        input.inputMode = 'numeric';
-        input.placeholder = 'Лише цифри';
-        input.addEventListener('input', () => {
-          const cleaned = input.value.replace(/\D+/g, '');
-          if (cleaned !== input.value) input.value = cleaned;
-          values[field.key] = input.value;
-        });
-      } else if (wantsDate) {
-        input.placeholder = 'ДД.ММ.РРРР';
-        // auto-fill today's date if empty
-        input.value = (field.default ?? '') || todayUA;
-        values[field.key] = input.value;
-        input.addEventListener('input', () => { values[field.key] = input.value; });
-      } else {
-        input.value = field.default ?? '';
-        values[field.key] = input.value;
-        input.addEventListener('input', () => { values[field.key] = input.value; });
-      }
-
-      label.append(input);
-      row.append(label);
-      form.append(row);
-      inputs.push(input);
-    }
-
-    const hint = document.createElement('div');
-    hint.className = 'sdo-add-modal-hint';
-    hint.textContent = 'Підтвердження: Enter = далі / Готово. На останньому полі Enter = Додати.';
-
-    form.append(hint);
-    body.append(form);
-
-    // Footer
-    const footer = document.createElement('div');
-    footer.className = 'sdo-add-modal-footer';
-
-    const btnCancel = document.createElement('button');
-    btnCancel.type = 'button';
-    btnCancel.className = 'sdo-btn sdo-btn-secondary';
-    btnCancel.textContent = 'Скасувати';
-
-    const btnOk = document.createElement('button');
-    btnOk.type = 'button';
-    btnOk.className = 'sdo-btn sdo-btn-primary';
-    btnOk.textContent = 'Додати';
-
-    footer.append(btnCancel, btnOk);
-    win.append(body, footer);
-    overlay.append(win);
-
-    const close = () => {
-      document.removeEventListener('keydown', onKeyDown, true);
-      overlay.remove();
-    };
-
-    const doSubmit = async () => {
-      await onSubmit(values);
-      close();
-    };
-
-    btnCancel.addEventListener('click', () => {
-      onCancel?.();
-      close();
-    });
-    btnOk.addEventListener('click', () => { void doSubmit(); });
-
-    // Keyboard UX
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onCancel?.();
-        close();
-        return;
-      }
-      if (e.key !== 'Enter') return;
-
-      // Ctrl+Enter = submit from anywhere
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        void doSubmit();
-        return;
-      }
-
-      const active = document.activeElement;
-      const idx = inputs.indexOf(active);
-      if (idx === -1) return;
-
-      e.preventDefault();
-      // Shift+Enter = back
-      if (e.shiftKey) {
-        const prev = inputs[idx - 1];
-        if (prev) prev.focus();
-        return;
-      }
-      // Enter = next, or submit on last
-      const next = inputs[idx + 1];
-      if (next) next.focus();
-      else void doSubmit();
-    };
-
-    document.addEventListener('keydown', onKeyDown, true);
-    document.body.append(overlay);
-
-    // Focus first input
-    queueMicrotask(() => { inputs[0]?.focus(); });
+    overlay.append(modal);
+    return { overlay, modal };
   }
 
   function columnSettingsUI(host, schema, settings, onChange) {
@@ -483,9 +352,9 @@ export function createTableRendererModule(opts = {}) {
         const refreshTable = async () => {
           const settings = await loadSettings(runtime.storage);
           const resolved = await resolveSchema(runtime);
+          const schema = resolved.schema;
           currentJournalId = resolved.state?.activeJournalId ?? null;
           const dataset = await loadDataset(runtime, runtime.storage, currentJournalId);
-          const schema = resolved.schema;
           if (!schema || !Array.isArray(schema.fields) || schema.fields.length === 0) {
             table.innerHTML = '';
             const msg = document.createElement('div');
@@ -505,6 +374,7 @@ export function createTableRendererModule(opts = {}) {
           const view = engine.compute();
 
           table.innerHTML = '';
+
           // One table:
           // - <thead> has 2 sticky rows (titles + column numbers)
           // - plus 2 fixed-width action columns on the far right (Transfer / Delete), like v1
@@ -541,7 +411,6 @@ export function createTableRendererModule(opts = {}) {
             idxTr.append(thIdx);
           }
 
-          // Action columns (fixed width)
           const colTransfer = document.createElement('col');
           colTransfer.style.width = `${actionsColW}px`;
           colTransfer.style.minWidth = `${actionsColW}px`;
@@ -568,6 +437,8 @@ export function createTableRendererModule(opts = {}) {
           table.append(colgroup);
           table.append(thead);
 
+          // Measure the 1st header row height and set CSS var so the 2nd row can sticky under it.
+          // (Needed because row height can change with theme/font/2-line labels.)
           const syncHeaderHeights = () => {
             const h = titleTr.getBoundingClientRect().height;
             table.style.setProperty('--sdo-thead-row1-h', `${Math.ceil(h)}px`);
@@ -706,21 +577,42 @@ if (isFirstCol) {
             await refreshTable();
             return;
           }
+          const modal = createModal();
           const model = engine.getAddFormModel();
+          const form = document.createElement('form');
+          const values = {};
 
-          openAddModal({
-            fields: model,
-            onSubmit: async (values) => {
-              const validation = engine.validateAddForm(values);
-              if (!validation.valid) return;
-              const record = engine.buildRecordFromForm(values);
-              const dataset = await loadDataset(runtime, runtime.storage, currentJournalId);
-              const nextDataset = { ...dataset, records: [...dataset.records, record] };
-              await saveDataset(runtime, runtime.storage, currentJournalId, nextDataset);
-              await refreshTable();
-            },
-            onCancel: () => {}
+          for (const field of model) {
+            const label = document.createElement('label');
+            label.textContent = field.label;
+            label.style.display = 'block';
+            const input = document.createElement('input');
+            input.type = field.type === 'number' ? 'number' : 'text';
+            input.value = field.default ?? '';
+            input.addEventListener('change', () => { values[field.key] = input.value; });
+            label.append(input);
+            form.append(label);
+          }
+
+          const submit = document.createElement('button');
+          submit.type = 'submit';
+          submit.textContent = 'Додати';
+          form.append(submit);
+
+          form.addEventListener('submit', async (ev) => {
+            ev.preventDefault();
+            const validation = engine.validateAddForm(values);
+            if (!validation.valid) return;
+            const record = engine.buildRecordFromForm(values);
+            const dataset = await loadDataset(runtime, runtime.storage, currentJournalId);
+            const nextDataset = { ...dataset, records: [...dataset.records, record] };
+            await saveDataset(runtime, runtime.storage, currentJournalId, nextDataset);
+            document.body.removeChild(modal.overlay);
+            await refreshTable();
           });
+
+          modal.modal.append(form);
+          document.body.append(modal.overlay);
         });
 
         selectBtn.addEventListener('click', async () => {
