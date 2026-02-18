@@ -5,6 +5,8 @@ function cellKey(rowId, colKey) {
   return `${rowId}:${colKey}`;
 }
 
+const EMPTY_SCHEMA = { id: 'tpl:__none__', fields: [] };
+
 export function getRenderableCells(row, columns, cellSpanMap) {
   const cells = [];
   for (const column of columns) {
