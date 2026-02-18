@@ -58,15 +58,53 @@ function buildHeaderTitle(runtime) {
   return journal ? `Таблиця: ${journal.title}` : 'Таблиця';
 }
 
-function getUxUiSettings() {
-  const UIX = typeof window !== 'undefined' ? window.UI : globalThis.UI;
-  return UIX?.getSettings?.() ?? {};
+function getRuntimeState(runtime) {
+  if (runtime?.api?.getState) return runtime.api.getState();
+  if (runtime?.sdo?.api?.getState) return runtime.sdo.api.getState();
+  return null;
 }
 
-function styleTableCell(cellEl, { showBorders = true } = {}) {
-  cellEl.style.textAlign = 'center';
-  cellEl.style.verticalAlign = 'middle';
-  cellEl.style.border = showBorders ? '1px solid var(--tableGrid, #d7deea)' : 'none';
+function getJournalTemplatesApi(runtime) {
+  return runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
+}
+
+async function ensureJournalTemplateId(runtime, state, journal, journalTemplatesApi) {
+  let templateId = journal?.templateId;
+  if (!journal || templateId || typeof journalTemplatesApi?.listTemplateEntities !== 'function') {
+    return templateId;
+  }
+
+  const list = await journalTemplatesApi.listTemplateEntities();
+  const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
+  if (!defaultTplId) return null;
+
+  templateId = defaultTplId;
+  if (typeof runtime?.sdo?.commit === 'function') {
+    await runtime.sdo.commit((next) => {
+      next.journals = (next.journals ?? []).map((item) => (
+        item.id === journal.id ? { ...item, templateId: defaultTplId } : item
+      ));
+    }, ['journals_nodes_v2']);
+  }
+
+  return templateId;
+}
+
+async function ensureActiveJournal(runtime, state) {
+  if (state?.activeJournalId || !state?.activeSpaceId || !Array.isArray(state?.journals) || state.journals.length === 0) {
+    return state;
+  }
+
+  const candidate = state.journals.find((journal) => (
+    journal.spaceId === state.activeSpaceId && journal.parentId === state.activeSpaceId
+  ));
+  if (!candidate || typeof runtime?.sdo?.commit !== 'function') return state;
+
+  await runtime.sdo.commit((next) => {
+    next.activeJournalId = candidate.id;
+  }, ['nav_last_loc_v2']);
+
+  return getRuntimeState(runtime);
 }
 
 export function createTableRendererModule(opts = {}) {
@@ -96,47 +134,22 @@ export function createTableRendererModule(opts = {}) {
   }
 
   async function resolveSchema(runtime) {
-    const state = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
-    const journalId = state?.activeJournalId;
-    const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
+    const initialState = getRuntimeState(runtime);
+    const state = await ensureActiveJournal(runtime, initialState);
+    const journal = (state?.journals ?? []).find((item) => item.id === state?.activeJournalId);
 
-    const resolveSchemaForJournal = async (journal, runtimeState) => {
-      if (!jt?.getTemplate) return { schema: EMPTY_SCHEMA, journal, state: runtimeState };
-
-      let templateId = journal?.templateId;
-      if (journal && !templateId) {
-        const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
-        const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
-        if (defaultTplId) {
-          templateId = defaultTplId;
-          if (typeof runtime?.sdo?.commit === 'function') {
-            await runtime.sdo.commit((next) => {
-              next.journals = (next.journals ?? []).map((item) => (item.id === journal.id ? { ...item, templateId: defaultTplId } : item));
-            }, ['journals_nodes_v2']);
-          }
-        }
-      }
-
-      if (!templateId) return { schema: EMPTY_SCHEMA, journal, state: runtimeState };
-      const template = await jt.getTemplate(templateId);
-      return { schema: schemaFromTemplate(template), journal, state: runtimeState };
-    };
-
-    // Auto-select: if no active journal but there are journals in the active space, pick the first root journal.
-    if (!journalId && state?.activeSpaceId && Array.isArray(state?.journals) && state.journals.length) {
-      const candidate = state.journals.find((j) => j.spaceId === state.activeSpaceId && j.parentId === state.activeSpaceId);
-      if (candidate && typeof runtime?.sdo?.commit === 'function') {
-        await runtime.sdo.commit((next) => { next.activeJournalId = candidate.id; }, ['nav_last_loc_v2']);
-        // refresh state snapshot after commit
-        const st2 = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
-        const j2 = (st2?.journals ?? []).find((j) => j.id === st2?.activeJournalId);
-        // continue resolving with the updated journal/state
-        return resolveSchemaForJournal(j2, st2);
-      }
+    const journalTemplatesApi = getJournalTemplatesApi(runtime);
+    if (!journalTemplatesApi?.getTemplate) {
+      return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
     }
 
-    const journal = (state?.journals ?? []).find((j) => j.id === journalId);
-    return resolveSchemaForJournal(journal, state);
+    const templateId = await ensureJournalTemplateId(runtime, state, journal, journalTemplatesApi);
+    if (!templateId) {
+      return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
+    }
+
+    const template = await journalTemplatesApi.getTemplate(templateId);
+    return { schema: schemaFromTemplate(template), journal, state };
   }
 
 
