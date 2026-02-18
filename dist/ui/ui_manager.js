@@ -22,7 +22,8 @@
     touchMode: false,
     navCircles: true,
     gestures: true,
-    tableDensity: 'normal'
+    tableDensity: 'normal',
+    tableCellBorders: true
   });
 
   const listeners = new Map();
@@ -72,6 +73,8 @@
       normalized.tableDensity = DEFAULTS.tableDensity;
     }
 
+    normalized.tableCellBorders = Boolean(normalized.tableCellBorders);
+
     return normalized;
   }
 
@@ -82,6 +85,7 @@
     root.dataset.navCircles = state.navCircles ? 'on' : 'off';
     root.dataset.gestures = state.gestures ? 'on' : 'off';
     root.dataset.tableDensity = state.tableDensity;
+    root.dataset.tableCellBorders = state.tableCellBorders ? 'on' : 'off';
   }
 
   function applySettings(partialSettings = {}) {

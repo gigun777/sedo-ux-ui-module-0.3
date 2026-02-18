@@ -5,6 +5,8 @@ function cellKey(rowId, colKey) {
   return `${rowId}:${colKey}`;
 }
 
+const EMPTY_SCHEMA = { id: 'tpl:__none__', fields: [] };
+
 export function getRenderableCells(row, columns, cellSpanMap) {
   const cells = [];
   for (const column of columns) {
@@ -372,6 +374,8 @@ export function createTableRendererModule(opts = {}) {
           engine = createTableEngine({ schema, settings });
           engine.setDataset(dataset);
           const view = engine.compute();
+          const uxSettings = getUxUiSettings();
+          const showCellBorders = uxSettings.tableCellBorders !== false;
 
           table.innerHTML = '';
 
@@ -403,11 +407,13 @@ export function createTableRendererModule(opts = {}) {
 
             const thTitle = document.createElement('th');
             thTitle.textContent = col.field?.label ?? col.columnKey;
+            styleTableCell(thTitle, { showBorders: showCellBorders });
             titleTr.append(thTitle);
 
             const thIdx = document.createElement('th');
             thIdx.className = 'sdo-col-idx';
             thIdx.textContent = String(colIdx);
+            styleTableCell(thIdx, { showBorders: showCellBorders });
             idxTr.append(thIdx);
           }
 
@@ -422,12 +428,14 @@ export function createTableRendererModule(opts = {}) {
           const thTransfer = document.createElement('th');
           thTransfer.className = 'sdo-col-actions';
           thTransfer.rowSpan = 2;
+          styleTableCell(thTransfer, { showBorders: showCellBorders });
           thTransfer.title = 'Перенести';
           thTransfer.textContent = '⇄';
 
           const thDelete = document.createElement('th');
           thDelete.className = 'sdo-col-actions';
           thDelete.rowSpan = 2;
+          styleTableCell(thDelete, { showBorders: showCellBorders });
           thDelete.title = 'Видалити';
           thDelete.textContent = '🗑';
 
@@ -455,21 +463,15 @@ export function createTableRendererModule(opts = {}) {
             const renderableCells = getRenderableCells(row, view.columns, view.cellSpanMap);
             for (const cell of renderableCells) {
               const td = document.createElement('td');
+              styleTableCell(td, { showBorders: showCellBorders });
               const span = cell.span;
               if (span.rowSpan) td.rowSpan = span.rowSpan;
               if (span.colSpan) td.colSpan = span.colSpan;
 
               const formatted = defaultFormatCell(row.record.cells?.[cell.colKey], row.record.fmt?.[cell.colKey] ?? {}, schema.fields.find((f) => f.key === cell.colKey) ?? {}, { locale: 'uk-UA', dateFormat: 'DD.MM.YYYY' });
-              const firstColKey = view.columns[0]?.columnKey;
-              const isFirstCol = cell.colKey === firstColKey;
 
 // Render normal cell text by default.
 td.textContent = formatted.text;
-
-// Indentation only for the first (tree) column (do not change padding for other columns -> keeps header/body aligned).
-if (isFirstCol) {
-  td.style.paddingLeft = `${row.depth * 16 + 8}px`;
-}
 
               // Actions are rendered as their own fixed-width columns at the far right (see below).
 
@@ -528,6 +530,7 @@ if (isFirstCol) {
             {
               const tdTransfer = document.createElement('td');
               tdTransfer.className = 'sdo-col-actions';
+              styleTableCell(tdTransfer, { showBorders: showCellBorders });
               const transferBtn = document.createElement('button');
               transferBtn.className = 'sdo-row-transfer';
               transferBtn.textContent = '⇄';
@@ -541,6 +544,7 @@ if (isFirstCol) {
 
               const tdDelete = document.createElement('td');
               tdDelete.className = 'sdo-col-actions';
+              styleTableCell(tdDelete, { showBorders: showCellBorders });
               const deleteBtn = document.createElement('button');
               deleteBtn.className = 'sdo-row-delete';
               deleteBtn.textContent = '🗑';
@@ -644,8 +648,10 @@ if (isFirstCol) {
 
     doRender();
     const off = runtime.sdo.on('state:changed', doRender);
+    const offUiSettings = (typeof window !== 'undefined' ? window.UI : globalThis.UI)?.on?.('settingsChanged', doRender);
     return () => {
       off?.();
+      offUiSettings?.();
       cleanup?.();
     };
   }

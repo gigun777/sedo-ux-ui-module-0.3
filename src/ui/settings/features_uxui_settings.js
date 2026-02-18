@@ -125,6 +125,11 @@
             densSel.addEventListener('change', () => { draft.tableDensity = densSel.value; markDirty(); });
             body.appendChild(row('Щільність таблиці', densSel));
 
+            // Table cell borders
+            const bordersToggle = makeToggle(draft.tableCellBorders !== false);
+            bordersToggle.addEventListener('change', () => { draft.tableCellBorders = bordersToggle.checked; markDirty(); });
+            body.appendChild(row('Межі комірок таблиці', bordersToggle, 'Вмикає/вимикає відображення сітки комірок у таблицях журналів.'));
+
             // Buttons
             const applyBtn = document.createElement('button');
             applyBtn.className = 'btn uxui-btn-primary';
@@ -167,6 +172,7 @@
               navToggle.checked = !!draft.navCircles;
               gestToggle.checked = !!draft.gestures;
               densSel.value = draft.tableDensity || 'normal';
+              bordersToggle.checked = draft.tableCellBorders !== false;
               dirty = false;
               applyBtn.disabled = true;
               resetBtn.disabled = true;
@@ -184,6 +190,7 @@
                 draft.navCircles = !!next.navCircles;
                 draft.gestures = !!next.gestures;
                 draft.tableDensity = next.tableDensity || 'normal';
+                draft.tableCellBorders = next.tableCellBorders !== false;
 
                 themeSel.value = draft.theme;
                 scaleSel.value = String(draft.scale);
@@ -191,6 +198,7 @@
                 navToggle.checked = draft.navCircles;
                 gestToggle.checked = draft.gestures;
                 densSel.value = draft.tableDensity;
+                bordersToggle.checked = draft.tableCellBorders;
               } catch (e) {}
             });
 

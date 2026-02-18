@@ -72,6 +72,7 @@ export function createModalManager(layerEl) {
     };
     overlay.addEventListener('mousedown', onOverlayClick);
 
+    // Focus first focusable element
     queueMicrotask(() => {
       const focusable = win.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
       if (focusable && typeof focusable.focus === 'function') focusable.focus();
