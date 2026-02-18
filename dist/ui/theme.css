@@ -1,111 +1,154 @@
-/*
-  SDO Theme Tokens
-  - Default: light
-  - Dark mode: set <html data-theme="dark">
-*/
-
 :root {
-  --sdo-bg: #f6f7f8;
-  --sdo-panel: #ffffff;
-  --sdo-panel-2: #f6f6f6;
-  --sdo-text: #111111;
-  --sdo-muted: #666666;
-  --sdo-border: #dddddd;
-
-  --sdo-accent: #d8efdb;
-  --sdo-btn: #ececec;
-  --sdo-btn-2: #e9e9e9;
-  --sdo-btn-primary: #111111;
-  --sdo-btn-primary-text: #ffffff;
-
-  --sdo-input-bg: #ffffff;
-  --sdo-input-border: #d4d4d4;
-
-  --sdo-overlay: rgba(0, 0, 0, 0.25);
-  --sdo-shadow: 0 15px 40px rgba(0, 0, 0, 0.15);
+  --bg: #f5f7fb;
+  --text: #1f2937;
+  --panel: #ffffff;
+  --border: #d7deea;
+  --accent: #3b82f6;
+  --danger: #dc2626;
+  --tableBg: #ffffff;
+  --tableHeadBg: #edf2f8;
+  --tableHeadBg2: #e4ebf4;
+  --tableGrid: #d7deea;
+  --radius: 12px;
+  --gap: 12px;
+  --fontSize: 14px;
+  --controlH: 36px;
+  --ui-scale: 1;
 }
 
-html[data-theme="dark"] {
-  /* Softer dark theme: grey surfaces, low contrast (no pure black) */
-  /* Lightened dark palette (closer to graphite than black) */
-  /* Lighter dark background (more "grey" than "black") */
-  --sdo-bg: #4a4f57;
-  --sdo-panel: #535965;
-  --sdo-panel-2: #4f5561;
-  --sdo-text: #e2e6ec;
-  --sdo-muted: #b6beca;
-  --sdo-border: #666e7c;
-
-  --sdo-accent: #3b4440;
-  --sdo-btn: #5a606d;
-  /* Table header / secondary surfaces */
-  --sdo-btn-2: #4b515c;
-  --sdo-btn-primary: #687189;
-  --sdo-btn-primary-text: #eef2f7;
-
-  --sdo-input-bg: #4a4f57;
-  --sdo-input-border: #747e92;
-
-  --sdo-overlay: rgba(0, 0, 0, 0.32);
-  --sdo-shadow: 0 18px 55px rgba(0, 0, 0, 0.28);
+html[data-theme='dark'] {
+  --bg: #1f242c;
+  --text: #e6e9ef;
+  --panel: #2a313c;
+  --border: #414b5b;
+  --accent: #63a4ff;
+  --danger: #f27d7d;
+  --tableBg: #252c36;
+  --tableHeadBg: #303a47;
+  --tableHeadBg2: #384455;
+  --tableGrid: #485568;
 }
 
- /* Minimal application of tokens (does not require refactor of all CSS at once) */
-html, body {
-  background: var(--sdo-bg) !important;
-  color: var(--sdo-text);
+html[data-theme='gray'] {
+  --bg: #eceff3;
+  --text: #222831;
+  --panel: #f8fafc;
+  --border: #bcc6d4;
+  --accent: #4b7abf;
+  --danger: #c84d4d;
+  --tableBg: #f8fafc;
+  --tableHeadBg: #dde4ed;
+  --tableHeadBg2: #d2dae6;
+  --tableGrid: #b8c2d1;
 }
 
-.sdo-panels, .sdo-settings, .sdo-table {
-  background: var(--sdo-panel) !important;
+html[data-theme='contrast'] {
+  --bg: #101214;
+  --text: #f8fafc;
+  --panel: #1a1e22;
+  --border: #6b7280;
+  --accent: #00cfff;
+  --danger: #ff6363;
+  --tableBg: #12161a;
+  --tableHeadBg: #252c34;
+  --tableHeadBg2: #313a45;
+  --tableGrid: #707b8a;
 }
 
-.sdo-nav-btn {
-  background: var(--sdo-btn) !important;
-  color: var(--sdo-text) !important;
+html {
+  font-size: calc(var(--fontSize) * var(--ui-scale));
 }
 
-.sdo-nav-main {
-  background: var(--sdo-accent) !important;
+body {
+  background: var(--bg);
+  color: var(--text);
 }
 
-.sdo-add-module,
-.sdo-module-button {
-  background: var(--sdo-btn-2) !important;
-  color: var(--sdo-text) !important;
+.btn,
+.input,
+textarea,
+select {
+  min-height: var(--controlH);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
 }
 
-/* Add modal tokens */
-.sdo-add-modal-overlay { background: var(--sdo-overlay) !important; }
-.sdo-add-modal-window { background: var(--sdo-panel-2) !important; box-shadow: var(--sdo-shadow) !important; }
-.sdo-add-modal-label { color: var(--sdo-text) !important; }
-.sdo-add-modal-hint { color: var(--sdo-muted) !important; }
-.sdo-add-modal-input {
-  background: var(--sdo-input-bg) !important;
-  border-color: var(--sdo-input-border) !important;
-  color: var(--sdo-text) !important;
+.btn { padding: 0 14px; cursor: pointer; }
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.btn-link { border: 0; background: transparent; color: var(--accent); min-height: auto; }
+
+.ui-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.46);
+  display: grid;
+  place-items: center;
+}
+.ui-overlay.hidden { display: none; }
+
+.ui-modal {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.25);
+  width: min(680px, 92vw);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 16px;
 }
 
-.sdo-btn-primary { background: var(--sdo-btn-primary) !important; color: var(--sdo-btn-primary-text) !important; }
-.sdo-btn-secondary { background: var(--sdo-btn) !important; border-color: var(--sdo-border) !important; color: var(--sdo-text) !important; }
+.ui-modal-title { margin: 0 0 12px; }
+.ui-modal-content { display: grid; gap: var(--gap); }
+.ui-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
 
+.ui-form { display: grid; gap: var(--gap); }
+.ui-form-row { display: grid; gap: 6px; }
+.ui-form-label { font-weight: 600; }
+.ui-form-actions { display: flex; gap: 10px; align-items: center; }
 
-/* Table theming */
-.sdo-table {
-  background: var(--sdo-panel) !important;
-  border-color: var(--sdo-border) !important;
+.toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.toggle input { display: none; }
+.toggle-slider {
+  width: 40px;
+  height: 22px;
+  border-radius: 22px;
+  background: var(--border);
+  position: relative;
 }
-.sdo-table th, .sdo-table td {
-  border-bottom-color: var(--sdo-border) !important;
-  color: var(--sdo-text) !important;
+.toggle-slider::after {
+  content: '';
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform .2s;
 }
-.sdo-table thead th {
-  background: var(--sdo-btn-2) !important;
-}
-.sdo-col-idx { color: var(--sdo-muted) !important; }
+.toggle input:checked + .toggle-slider::after { transform: translateX(18px); }
+.toggle input:checked + .toggle-slider { background: var(--accent); }
 
-/* Row action buttons */
-.sdo-row-transfer, .sdo-row-delete {
-  background: var(--sdo-btn) !important;
-  color: var(--sdo-text) !important;
+.ui-toast-host { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 1200; }
+.ui-toast { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.ui-toast.type-success { border-color: #22c55e; }
+.ui-toast.type-error { border-color: var(--danger); }
+.ui-toast.type-warn { border-color: #f59e0b; display: flex; gap: 8px; align-items: center; }
+
+.ui-settings-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
 }
+.ui-settings-grid { display: grid; gap: 12px; }

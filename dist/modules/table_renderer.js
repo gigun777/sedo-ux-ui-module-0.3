@@ -5,6 +5,8 @@ function cellKey(rowId, colKey) {
   return `${rowId}:${colKey}`;
 }
 
+const EMPTY_SCHEMA = { id: 'tpl:__none__', fields: [] };
+
 export function getRenderableCells(row, columns, cellSpanMap) {
   const cells = [];
   for (const column of columns) {
@@ -56,6 +58,17 @@ function buildHeaderTitle(runtime) {
   return journal ? `Таблиця: ${journal.title}` : 'Таблиця';
 }
 
+function getUxUiSettings() {
+  const UIX = typeof window !== 'undefined' ? window.UI : globalThis.UI;
+  return UIX?.getSettings?.() ?? {};
+}
+
+function styleTableCell(cellEl, { showBorders = true } = {}) {
+  cellEl.style.textAlign = 'center';
+  cellEl.style.verticalAlign = 'middle';
+  cellEl.style.border = showBorders ? '1px solid var(--tableGrid, #d7deea)' : 'none';
+}
+
 export function createTableRendererModule(opts = {}) {
   const {
     // legacy/fallback single-dataset key (used only when tableStore module is not present)
@@ -85,6 +98,30 @@ export function createTableRendererModule(opts = {}) {
   async function resolveSchema(runtime) {
     const state = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
     const journalId = state?.activeJournalId;
+    const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
+
+    const resolveSchemaForJournal = async (journal, runtimeState) => {
+      if (!jt?.getTemplate) return { schema: EMPTY_SCHEMA, journal, state: runtimeState };
+
+      let templateId = journal?.templateId;
+      if (journal && !templateId) {
+        const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
+        const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
+        if (defaultTplId) {
+          templateId = defaultTplId;
+          if (typeof runtime?.sdo?.commit === 'function') {
+            await runtime.sdo.commit((next) => {
+              next.journals = (next.journals ?? []).map((item) => (item.id === journal.id ? { ...item, templateId: defaultTplId } : item));
+            }, ['journals_nodes_v2']);
+          }
+        }
+      }
+
+      if (!templateId) return { schema: EMPTY_SCHEMA, journal, state: runtimeState };
+      const template = await jt.getTemplate(templateId);
+      return { schema: schemaFromTemplate(template), journal, state: runtimeState };
+    };
+
     // Auto-select: if no active journal but there are journals in the active space, pick the first root journal.
     if (!journalId && state?.activeSpaceId && Array.isArray(state?.journals) && state.journals.length) {
       const candidate = state.journals.find((j) => j.spaceId === state.activeSpaceId && j.parentId === state.activeSpaceId);
@@ -94,54 +131,12 @@ export function createTableRendererModule(opts = {}) {
         const st2 = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
         const j2 = (st2?.journals ?? []).find((j) => j.id === st2?.activeJournalId);
         // continue resolving with the updated journal/state
-        return await (async () => {
-          const journal = j2;
-          let templateId = journal?.templateId;
-          const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
-          if (!jt?.getTemplate) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state: st2 };
-
-          if (journal && !templateId) {
-            const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
-            const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
-            if (defaultTplId) {
-              templateId = defaultTplId;
-              await runtime.sdo.commit((next) => {
-                next.journals = (next.journals ?? []).map((j) => (j.id === journal.id ? { ...j, templateId: defaultTplId } : j));
-              }, ['journals_nodes_v2']);
-            }
-          }
-
-          if (!templateId) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state: st2 };
-          const template = await jt.getTemplate(templateId);
-          return { schema: schemaFromTemplate(template), journal, state: st2 };
-        })();
+        return resolveSchemaForJournal(j2, st2);
       }
     }
 
     const journal = (state?.journals ?? []).find((j) => j.id === journalId);
-    let templateId = journal?.templateId;
-
-    const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
-    if (!jt?.getTemplate) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
-
-    // Auto-heal: if journal exists but has no templateId, assign default (prefer "test")
-    if (journal && !templateId) {
-      const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
-      const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
-      if (defaultTplId) {
-        templateId = defaultTplId;
-        if (typeof runtime?.sdo?.commit === 'function') {
-          await runtime.sdo.commit((next) => {
-            next.journals = (next.journals ?? []).map((j) => (j.id === journal.id ? { ...j, templateId: defaultTplId } : j));
-          }, ['journals_nodes_v2']);
-        }
-      }
-    }
-
-    if (!templateId) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
-
-    const template = await jt.getTemplate(templateId);
-    return { schema: schemaFromTemplate(template), journal, state };
+    return resolveSchemaForJournal(journal, state);
   }
 
 
@@ -159,12 +154,14 @@ export function createTableRendererModule(opts = {}) {
       const ds = await store.getDataset(journalId);
       return normalizeDataset({ records: ds.records ?? [], merges: ds.merges ?? [] });
     }
+    // fallback single-dataset storage
     return normalizeDataset((await storage.get(datasetKey)) ?? { records: [], merges: [] });
   }
 
   async function saveDataset(runtime, storage, journalId, dataset) {
     const store = runtime?.api?.tableStore || runtime?.sdo?.api?.tableStore;
     if (store?.upsertRecords && journalId) {
+      // Replace records for now (renderer owns ordering)
       await store.upsertRecords(journalId, dataset.records ?? [], 'replace');
       return;
     }
@@ -178,162 +175,23 @@ export function createTableRendererModule(opts = {}) {
     return () => {};
   }
 
-  function openAddModal({ fields, onSubmit, onCancel }) {
-    // Overlay
+  function createModal() {
     const overlay = document.createElement('div');
-    overlay.className = 'sdo-add-modal-overlay';
-    overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
+    overlay.style.position = 'fixed';
+    overlay.style.inset = '0';
+    overlay.style.background = 'rgba(0,0,0,.35)';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
 
-    // Window
-    const win = document.createElement('div');
-    win.className = 'sdo-add-modal-window';
+    const modal = document.createElement('div');
+    modal.style.background = '#fff';
+    modal.style.padding = '12px';
+    modal.style.borderRadius = '8px';
+    modal.style.minWidth = '360px';
 
-    // Body (scroll only inside)
-    const body = document.createElement('div');
-    body.className = 'sdo-add-modal-body';
-
-    const form = document.createElement('form');
-    form.className = 'sdo-add-modal-form';
-    form.addEventListener('submit', (ev) => ev.preventDefault());
-
-    const values = {};
-    const inputs = [];
-
-    const todayUA = (() => {
-      try {
-        const d = new Date();
-        const dd = String(d.getDate()).padStart(2, '0');
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const yyyy = String(d.getFullYear());
-        return `${dd}.${mm}.${yyyy}`;
-      } catch {
-        return '';
-      }
-    })();
-
-    for (const field of fields) {
-      const row = document.createElement('div');
-      row.className = 'sdo-add-modal-row';
-
-      const label = document.createElement('label');
-      label.className = 'sdo-add-modal-label';
-      label.textContent = `${field.label}${field.required ? ' (обов\'язково)' : ''}`;
-
-      const input = document.createElement('input');
-      input.className = 'sdo-add-modal-input';
-      input.type = 'text';
-
-      // Heuristics for placeholders (until template columns carry explicit types)
-      const lbl = String(field.label ?? '').toLowerCase();
-      const wantsDigits = /номер|кількість|к-сть|№/.test(lbl);
-      const wantsDate = /дата/.test(lbl);
-      if (wantsDigits) {
-        input.inputMode = 'numeric';
-        input.placeholder = 'Лише цифри';
-        input.addEventListener('input', () => {
-          const cleaned = input.value.replace(/\D+/g, '');
-          if (cleaned !== input.value) input.value = cleaned;
-          values[field.key] = input.value;
-        });
-      } else if (wantsDate) {
-        input.placeholder = 'ДД.ММ.РРРР';
-        // auto-fill today's date if empty
-        input.value = (field.default ?? '') || todayUA;
-        values[field.key] = input.value;
-        input.addEventListener('input', () => { values[field.key] = input.value; });
-      } else {
-        input.value = field.default ?? '';
-        values[field.key] = input.value;
-        input.addEventListener('input', () => { values[field.key] = input.value; });
-      }
-
-      label.append(input);
-      row.append(label);
-      form.append(row);
-      inputs.push(input);
-    }
-
-    const hint = document.createElement('div');
-    hint.className = 'sdo-add-modal-hint';
-    hint.textContent = 'Підтвердження: Enter = далі / Готово. На останньому полі Enter = Додати.';
-
-    form.append(hint);
-    body.append(form);
-
-    // Footer
-    const footer = document.createElement('div');
-    footer.className = 'sdo-add-modal-footer';
-
-    const btnCancel = document.createElement('button');
-    btnCancel.type = 'button';
-    btnCancel.className = 'sdo-btn sdo-btn-secondary';
-    btnCancel.textContent = 'Скасувати';
-
-    const btnOk = document.createElement('button');
-    btnOk.type = 'button';
-    btnOk.className = 'sdo-btn sdo-btn-primary';
-    btnOk.textContent = 'Додати';
-
-    footer.append(btnCancel, btnOk);
-    win.append(body, footer);
-    overlay.append(win);
-
-    const close = () => {
-      document.removeEventListener('keydown', onKeyDown, true);
-      overlay.remove();
-    };
-
-    const doSubmit = async () => {
-      await onSubmit(values);
-      close();
-    };
-
-    btnCancel.addEventListener('click', () => {
-      onCancel?.();
-      close();
-    });
-    btnOk.addEventListener('click', () => { void doSubmit(); });
-
-    // Keyboard UX
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onCancel?.();
-        close();
-        return;
-      }
-      if (e.key !== 'Enter') return;
-
-      // Ctrl+Enter = submit from anywhere
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        void doSubmit();
-        return;
-      }
-
-      const active = document.activeElement;
-      const idx = inputs.indexOf(active);
-      if (idx === -1) return;
-
-      e.preventDefault();
-      // Shift+Enter = back
-      if (e.shiftKey) {
-        const prev = inputs[idx - 1];
-        if (prev) prev.focus();
-        return;
-      }
-      // Enter = next, or submit on last
-      const next = inputs[idx + 1];
-      if (next) next.focus();
-      else void doSubmit();
-    };
-
-    document.addEventListener('keydown', onKeyDown, true);
-    document.body.append(overlay);
-
-    // Focus first input
-    queueMicrotask(() => { inputs[0]?.focus(); });
+    overlay.append(modal);
+    return { overlay, modal };
   }
 
   function columnSettingsUI(host, schema, settings, onChange) {
@@ -483,9 +341,9 @@ export function createTableRendererModule(opts = {}) {
         const refreshTable = async () => {
           const settings = await loadSettings(runtime.storage);
           const resolved = await resolveSchema(runtime);
+          const schema = resolved.schema;
           currentJournalId = resolved.state?.activeJournalId ?? null;
           const dataset = await loadDataset(runtime, runtime.storage, currentJournalId);
-          const schema = resolved.schema;
           if (!schema || !Array.isArray(schema.fields) || schema.fields.length === 0) {
             table.innerHTML = '';
             const msg = document.createElement('div');
@@ -503,8 +361,11 @@ export function createTableRendererModule(opts = {}) {
           engine = createTableEngine({ schema, settings });
           engine.setDataset(dataset);
           const view = engine.compute();
+          const uxSettings = getUxUiSettings();
+          const showCellBorders = uxSettings.tableCellBorders !== false;
 
           table.innerHTML = '';
+
           // One table:
           // - <thead> has 2 sticky rows (titles + column numbers)
           // - plus 2 fixed-width action columns on the far right (Transfer / Delete), like v1
@@ -533,15 +394,16 @@ export function createTableRendererModule(opts = {}) {
 
             const thTitle = document.createElement('th');
             thTitle.textContent = col.field?.label ?? col.columnKey;
+            styleTableCell(thTitle, { showBorders: showCellBorders });
             titleTr.append(thTitle);
 
             const thIdx = document.createElement('th');
             thIdx.className = 'sdo-col-idx';
             thIdx.textContent = String(colIdx);
+            styleTableCell(thIdx, { showBorders: showCellBorders });
             idxTr.append(thIdx);
           }
 
-          // Action columns (fixed width)
           const colTransfer = document.createElement('col');
           colTransfer.style.width = `${actionsColW}px`;
           colTransfer.style.minWidth = `${actionsColW}px`;
@@ -553,12 +415,14 @@ export function createTableRendererModule(opts = {}) {
           const thTransfer = document.createElement('th');
           thTransfer.className = 'sdo-col-actions';
           thTransfer.rowSpan = 2;
+          styleTableCell(thTransfer, { showBorders: showCellBorders });
           thTransfer.title = 'Перенести';
           thTransfer.textContent = '⇄';
 
           const thDelete = document.createElement('th');
           thDelete.className = 'sdo-col-actions';
           thDelete.rowSpan = 2;
+          styleTableCell(thDelete, { showBorders: showCellBorders });
           thDelete.title = 'Видалити';
           thDelete.textContent = '🗑';
 
@@ -568,6 +432,8 @@ export function createTableRendererModule(opts = {}) {
           table.append(colgroup);
           table.append(thead);
 
+          // Measure the 1st header row height and set CSS var so the 2nd row can sticky under it.
+          // (Needed because row height can change with theme/font/2-line labels.)
           const syncHeaderHeights = () => {
             const h = titleTr.getBoundingClientRect().height;
             table.style.setProperty('--sdo-thead-row1-h', `${Math.ceil(h)}px`);
@@ -584,21 +450,15 @@ export function createTableRendererModule(opts = {}) {
             const renderableCells = getRenderableCells(row, view.columns, view.cellSpanMap);
             for (const cell of renderableCells) {
               const td = document.createElement('td');
+              styleTableCell(td, { showBorders: showCellBorders });
               const span = cell.span;
               if (span.rowSpan) td.rowSpan = span.rowSpan;
               if (span.colSpan) td.colSpan = span.colSpan;
 
               const formatted = defaultFormatCell(row.record.cells?.[cell.colKey], row.record.fmt?.[cell.colKey] ?? {}, schema.fields.find((f) => f.key === cell.colKey) ?? {}, { locale: 'uk-UA', dateFormat: 'DD.MM.YYYY' });
-              const firstColKey = view.columns[0]?.columnKey;
-              const isFirstCol = cell.colKey === firstColKey;
 
 // Render normal cell text by default.
 td.textContent = formatted.text;
-
-// Indentation only for the first (tree) column (do not change padding for other columns -> keeps header/body aligned).
-if (isFirstCol) {
-  td.style.paddingLeft = `${row.depth * 16 + 8}px`;
-}
 
               // Actions are rendered as their own fixed-width columns at the far right (see below).
 
@@ -657,6 +517,7 @@ if (isFirstCol) {
             {
               const tdTransfer = document.createElement('td');
               tdTransfer.className = 'sdo-col-actions';
+              styleTableCell(tdTransfer, { showBorders: showCellBorders });
               const transferBtn = document.createElement('button');
               transferBtn.className = 'sdo-row-transfer';
               transferBtn.textContent = '⇄';
@@ -670,6 +531,7 @@ if (isFirstCol) {
 
               const tdDelete = document.createElement('td');
               tdDelete.className = 'sdo-col-actions';
+              styleTableCell(tdDelete, { showBorders: showCellBorders });
               const deleteBtn = document.createElement('button');
               deleteBtn.className = 'sdo-row-delete';
               deleteBtn.textContent = '🗑';
@@ -706,21 +568,42 @@ if (isFirstCol) {
             await refreshTable();
             return;
           }
+          const modal = createModal();
           const model = engine.getAddFormModel();
+          const form = document.createElement('form');
+          const values = {};
 
-          openAddModal({
-            fields: model,
-            onSubmit: async (values) => {
-              const validation = engine.validateAddForm(values);
-              if (!validation.valid) return;
-              const record = engine.buildRecordFromForm(values);
-              const dataset = await loadDataset(runtime, runtime.storage, currentJournalId);
-              const nextDataset = { ...dataset, records: [...dataset.records, record] };
-              await saveDataset(runtime, runtime.storage, currentJournalId, nextDataset);
-              await refreshTable();
-            },
-            onCancel: () => {}
+          for (const field of model) {
+            const label = document.createElement('label');
+            label.textContent = field.label;
+            label.style.display = 'block';
+            const input = document.createElement('input');
+            input.type = field.type === 'number' ? 'number' : 'text';
+            input.value = field.default ?? '';
+            input.addEventListener('change', () => { values[field.key] = input.value; });
+            label.append(input);
+            form.append(label);
+          }
+
+          const submit = document.createElement('button');
+          submit.type = 'submit';
+          submit.textContent = 'Додати';
+          form.append(submit);
+
+          form.addEventListener('submit', async (ev) => {
+            ev.preventDefault();
+            const validation = engine.validateAddForm(values);
+            if (!validation.valid) return;
+            const record = engine.buildRecordFromForm(values);
+            const dataset = await loadDataset(runtime, runtime.storage, currentJournalId);
+            const nextDataset = { ...dataset, records: [...dataset.records, record] };
+            await saveDataset(runtime, runtime.storage, currentJournalId, nextDataset);
+            document.body.removeChild(modal.overlay);
+            await refreshTable();
           });
+
+          modal.modal.append(form);
+          document.body.append(modal.overlay);
         });
 
         selectBtn.addEventListener('click', async () => {
@@ -752,8 +635,10 @@ if (isFirstCol) {
 
     doRender();
     const off = runtime.sdo.on('state:changed', doRender);
+    const offUiSettings = (typeof window !== 'undefined' ? window.UI : globalThis.UI)?.on?.('settingsChanged', doRender);
     return () => {
       off?.();
+      offUiSettings?.();
       cleanup?.();
     };
   }

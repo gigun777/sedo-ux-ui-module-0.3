@@ -10,7 +10,7 @@
   const UI = (global.UI = global.UI || {});
 
   const manifest = Object.freeze({
-    uxui: ['theme', 'scale', 'touchMode', 'navCircles', 'gestures', 'tableDensity']
+    uxui: ['theme', 'scale', 'touchMode', 'navCircles', 'gestures', 'tableDensity', 'tableCellBorders']
   });
 
   function pickSettings(keys, source) {

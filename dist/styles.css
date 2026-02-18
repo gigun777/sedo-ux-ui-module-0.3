@@ -147,7 +147,7 @@ html, body { margin: 0; background: #f6f7f8; overflow-x: hidden; }
 
 .sdo-settings-modal-panes {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 280px) minmax(240px, 320px) minmax(0, 1fr);
   min-height: 560px;
 }
 
@@ -390,6 +390,17 @@ html, body { margin: 0; background: #f6f7f8; overflow-x: hidden; }
   font-size: 11px;
   min-height: 26px;
 }
+
+.sdo-settings-modal-content{border-left:1px solid #ededed;}
+
+
+/* UXUI feature (legacy-cleanup): basic layout */
+.uxui-settings{ display:flex; flex-direction:column; gap:12px; padding:6px; }
+.uxui-row{ display:grid; grid-template-columns: 220px minmax(0,1fr); gap:12px; align-items:center; }
+.uxui-label{ font-size:13px; font-weight:600; }
+.uxui-control{ display:flex; align-items:center; gap:10px; }
+.uxui-select{ min-height:32px; padding:6px 10px; border-radius:10px; border:1px solid var(--border,#ddd); background:var(--panel,#fff); color:var(--text,#111); }
+.uxui-hint{ grid-column: 1 / -1; font-size:12px; opacity:.75; margin-top:-6px; }
 
 
 /* Settings modal: ensure 3rd content pane is visible */
