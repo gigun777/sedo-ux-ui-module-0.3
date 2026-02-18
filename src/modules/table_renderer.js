@@ -5,6 +5,8 @@ function cellKey(rowId, colKey) {
   return `${rowId}:${colKey}`;
 }
 
+const EMPTY_SCHEMA = { id: 'tpl:__none__', fields: [] };
+
 export function getRenderableCells(row, columns, cellSpanMap) {
   const cells = [];
   for (const column of columns) {
@@ -85,6 +87,30 @@ export function createTableRendererModule(opts = {}) {
   async function resolveSchema(runtime) {
     const state = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
     const journalId = state?.activeJournalId;
+    const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
+
+    const resolveSchemaForJournal = async (journal, runtimeState) => {
+      if (!jt?.getTemplate) return { schema: EMPTY_SCHEMA, journal, state: runtimeState };
+
+      let templateId = journal?.templateId;
+      if (journal && !templateId) {
+        const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
+        const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
+        if (defaultTplId) {
+          templateId = defaultTplId;
+          if (typeof runtime?.sdo?.commit === 'function') {
+            await runtime.sdo.commit((next) => {
+              next.journals = (next.journals ?? []).map((item) => (item.id === journal.id ? { ...item, templateId: defaultTplId } : item));
+            }, ['journals_nodes_v2']);
+          }
+        }
+      }
+
+      if (!templateId) return { schema: EMPTY_SCHEMA, journal, state: runtimeState };
+      const template = await jt.getTemplate(templateId);
+      return { schema: schemaFromTemplate(template), journal, state: runtimeState };
+    };
+
     // Auto-select: if no active journal but there are journals in the active space, pick the first root journal.
     if (!journalId && state?.activeSpaceId && Array.isArray(state?.journals) && state.journals.length) {
       const candidate = state.journals.find((j) => j.spaceId === state.activeSpaceId && j.parentId === state.activeSpaceId);
@@ -94,55 +120,12 @@ export function createTableRendererModule(opts = {}) {
         const st2 = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
         const j2 = (st2?.journals ?? []).find((j) => j.id === st2?.activeJournalId);
         // continue resolving with the updated journal/state
-        return await (async () => {
-          const journal = j2;
-          let templateId = journal?.templateId;
-          const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
-          if (!jt?.getTemplate) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state: st2 };
-
-          if (journal && !templateId) {
-            const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
-            const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
-            if (defaultTplId) {
-              templateId = defaultTplId;
-              await runtime.sdo.commit((next) => {
-                next.journals = (next.journals ?? []).map((j) => (j.id === journal.id ? { ...j, templateId: defaultTplId } : j));
-              }, ['journals_nodes_v2']);
-            }
-          }
-
-          if (!templateId) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state: st2 };
-          const template = await jt.getTemplate(templateId);
-          return { schema: schemaFromTemplate(template), journal, state: st2 };
-        })();
+        return resolveSchemaForJournal(j2, st2);
       }
     }
 
     const journal = (state?.journals ?? []).find((j) => j.id === journalId);
-    let templateId = journal?.templateId;
-
-    const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
-    if (!jt?.getTemplate) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
-
-    // Auto-heal: if journal exists but has no templateId, assign default (prefer "test")
-    if (journal && !templateId) {
-      const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
-      const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
-      if (defaultTplId) {
-        templateId = defaultTplId;
-        // Persist into navigation state (best-effort)
-        if (typeof runtime?.sdo?.commit === 'function') {
-          await runtime.sdo.commit((next) => {
-            next.journals = (next.journals ?? []).map((j) => (j.id === journal.id ? { ...j, templateId: defaultTplId } : j));
-          }, ['journals_nodes_v2']);
-        }
-      }
-    }
-
-    if (!templateId) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
-
-    const template = await jt.getTemplate(templateId);
-    return { schema: schemaFromTemplate(template), journal, state };
+    return resolveSchemaForJournal(journal, state);
   }
 
 
