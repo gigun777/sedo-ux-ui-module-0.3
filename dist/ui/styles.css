@@ -379,6 +379,18 @@ html, body { margin: 0; background: #f6f7f8; overflow-x: hidden; }
 
 }
 
+
+/* NAV COMPACT (P0): зробити кнопки "простори/журнали" вужчими ~в 2 рази */
+.sdo-nav-row{
+  grid-template-columns: 28px minmax(0, .5fr) minmax(0, .5fr) 28px;
+  max-width: 560px;
+}
+.sdo-nav-btn{
+  padding: 4px 6px;
+  font-size: 11px;
+  min-height: 26px;
+}
+
 .sdo-settings-modal-content{border-left:1px solid #ededed;}
 
 

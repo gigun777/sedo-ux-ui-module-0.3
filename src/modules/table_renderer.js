@@ -5,6 +5,8 @@ function cellKey(rowId, colKey) {
   return `${rowId}:${colKey}`;
 }
 
+const EMPTY_SCHEMA = { id: 'tpl:__none__', fields: [] };
+
 export function getRenderableCells(row, columns, cellSpanMap) {
   const cells = [];
   for (const column of columns) {
@@ -56,6 +58,13 @@ function buildHeaderTitle(runtime) {
   return journal ? `Таблиця: ${journal.title}` : 'Таблиця';
 }
 
+
+function styleTableCell(cellEl, { showBorders = true } = {}) {
+  cellEl.style.textAlign = 'center';
+  cellEl.style.verticalAlign = 'middle';
+  cellEl.style.border = showBorders ? '1px solid var(--tableGrid, #d7deea)' : 'none';
+}
+
 export function createTableRendererModule(opts = {}) {
   const {
     // legacy/fallback single-dataset key (used only when tableStore module is not present)
@@ -85,6 +94,30 @@ export function createTableRendererModule(opts = {}) {
   async function resolveSchema(runtime) {
     const state = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
     const journalId = state?.activeJournalId;
+    const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
+
+    const resolveSchemaForJournal = async (journal, runtimeState) => {
+      if (!jt?.getTemplate) return { schema: EMPTY_SCHEMA, journal, state: runtimeState };
+
+      let templateId = journal?.templateId;
+      if (journal && !templateId) {
+        const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
+        const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
+        if (defaultTplId) {
+          templateId = defaultTplId;
+          if (typeof runtime?.sdo?.commit === 'function') {
+            await runtime.sdo.commit((next) => {
+              next.journals = (next.journals ?? []).map((item) => (item.id === journal.id ? { ...item, templateId: defaultTplId } : item));
+            }, ['journals_nodes_v2']);
+          }
+        }
+      }
+
+      if (!templateId) return { schema: EMPTY_SCHEMA, journal, state: runtimeState };
+      const template = await jt.getTemplate(templateId);
+      return { schema: schemaFromTemplate(template), journal, state: runtimeState };
+    };
+
     // Auto-select: if no active journal but there are journals in the active space, pick the first root journal.
     if (!journalId && state?.activeSpaceId && Array.isArray(state?.journals) && state.journals.length) {
       const candidate = state.journals.find((j) => j.spaceId === state.activeSpaceId && j.parentId === state.activeSpaceId);
@@ -94,55 +127,12 @@ export function createTableRendererModule(opts = {}) {
         const st2 = runtime?.api?.getState ? runtime.api.getState() : (runtime?.sdo?.api?.getState ? runtime.sdo.api.getState() : null);
         const j2 = (st2?.journals ?? []).find((j) => j.id === st2?.activeJournalId);
         // continue resolving with the updated journal/state
-        return await (async () => {
-          const journal = j2;
-          let templateId = journal?.templateId;
-          const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
-          if (!jt?.getTemplate) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state: st2 };
-
-          if (journal && !templateId) {
-            const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
-            const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
-            if (defaultTplId) {
-              templateId = defaultTplId;
-              await runtime.sdo.commit((next) => {
-                next.journals = (next.journals ?? []).map((j) => (j.id === journal.id ? { ...j, templateId: defaultTplId } : j));
-              }, ['journals_nodes_v2']);
-            }
-          }
-
-          if (!templateId) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state: st2 };
-          const template = await jt.getTemplate(templateId);
-          return { schema: schemaFromTemplate(template), journal, state: st2 };
-        })();
+        return resolveSchemaForJournal(j2, st2);
       }
     }
 
     const journal = (state?.journals ?? []).find((j) => j.id === journalId);
-    let templateId = journal?.templateId;
-
-    const jt = runtime?.api?.journalTemplates || runtime?.sdo?.api?.journalTemplates || runtime?.sdo?.journalTemplates;
-    if (!jt?.getTemplate) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
-
-    // Auto-heal: if journal exists but has no templateId, assign default (prefer "test")
-    if (journal && !templateId) {
-      const list = typeof jt.listTemplateEntities === 'function' ? await jt.listTemplateEntities() : [];
-      const defaultTplId = (list.find((t) => t.id === 'test')?.id) || (list[0]?.id) || null;
-      if (defaultTplId) {
-        templateId = defaultTplId;
-        // Persist into navigation state (best-effort)
-        if (typeof runtime?.sdo?.commit === 'function') {
-          await runtime.sdo.commit((next) => {
-            next.journals = (next.journals ?? []).map((j) => (j.id === journal.id ? { ...j, templateId: defaultTplId } : j));
-          }, ['journals_nodes_v2']);
-        }
-      }
-    }
-
-    if (!templateId) return { schema: { id: 'tpl:__none__', fields: [] }, journal, state };
-
-    const template = await jt.getTemplate(templateId);
-    return { schema: schemaFromTemplate(template), journal, state };
+    return resolveSchemaForJournal(journal, state);
   }
 
 
@@ -367,6 +357,8 @@ export function createTableRendererModule(opts = {}) {
           engine = createTableEngine({ schema, settings });
           engine.setDataset(dataset);
           const view = engine.compute();
+          const uiRuntime = typeof window !== 'undefined' ? window.UI : globalThis.UI;
+          const showCellBorders = uiRuntime?.getSettings?.().tableCellBorders !== false;
 
           table.innerHTML = '';
 
@@ -398,11 +390,13 @@ export function createTableRendererModule(opts = {}) {
 
             const thTitle = document.createElement('th');
             thTitle.textContent = col.field?.label ?? col.columnKey;
+            styleTableCell(thTitle, { showBorders: showCellBorders });
             titleTr.append(thTitle);
 
             const thIdx = document.createElement('th');
             thIdx.className = 'sdo-col-idx';
             thIdx.textContent = String(colIdx);
+            styleTableCell(thIdx, { showBorders: showCellBorders });
             idxTr.append(thIdx);
           }
 
@@ -417,12 +411,14 @@ export function createTableRendererModule(opts = {}) {
           const thTransfer = document.createElement('th');
           thTransfer.className = 'sdo-col-actions';
           thTransfer.rowSpan = 2;
+          styleTableCell(thTransfer, { showBorders: showCellBorders });
           thTransfer.title = 'Перенести';
           thTransfer.textContent = '⇄';
 
           const thDelete = document.createElement('th');
           thDelete.className = 'sdo-col-actions';
           thDelete.rowSpan = 2;
+          styleTableCell(thDelete, { showBorders: showCellBorders });
           thDelete.title = 'Видалити';
           thDelete.textContent = '🗑';
 
@@ -450,21 +446,15 @@ export function createTableRendererModule(opts = {}) {
             const renderableCells = getRenderableCells(row, view.columns, view.cellSpanMap);
             for (const cell of renderableCells) {
               const td = document.createElement('td');
+              styleTableCell(td, { showBorders: showCellBorders });
               const span = cell.span;
               if (span.rowSpan) td.rowSpan = span.rowSpan;
               if (span.colSpan) td.colSpan = span.colSpan;
 
               const formatted = defaultFormatCell(row.record.cells?.[cell.colKey], row.record.fmt?.[cell.colKey] ?? {}, schema.fields.find((f) => f.key === cell.colKey) ?? {}, { locale: 'uk-UA', dateFormat: 'DD.MM.YYYY' });
-              const firstColKey = view.columns[0]?.columnKey;
-              const isFirstCol = cell.colKey === firstColKey;
 
 // Render normal cell text by default.
 td.textContent = formatted.text;
-
-// Indentation only for the first (tree) column (do not change padding for other columns -> keeps header/body aligned).
-if (isFirstCol) {
-  td.style.paddingLeft = `${row.depth * 16 + 8}px`;
-}
 
               // Actions are rendered as their own fixed-width columns at the far right (see below).
 
@@ -523,6 +513,7 @@ if (isFirstCol) {
             {
               const tdTransfer = document.createElement('td');
               tdTransfer.className = 'sdo-col-actions';
+              styleTableCell(tdTransfer, { showBorders: showCellBorders });
               const transferBtn = document.createElement('button');
               transferBtn.className = 'sdo-row-transfer';
               transferBtn.textContent = '⇄';
@@ -536,6 +527,7 @@ if (isFirstCol) {
 
               const tdDelete = document.createElement('td');
               tdDelete.className = 'sdo-col-actions';
+              styleTableCell(tdDelete, { showBorders: showCellBorders });
               const deleteBtn = document.createElement('button');
               deleteBtn.className = 'sdo-row-delete';
               deleteBtn.textContent = '🗑';
@@ -639,8 +631,10 @@ if (isFirstCol) {
 
     doRender();
     const off = runtime.sdo.on('state:changed', doRender);
+    const offUiSettings = (typeof window !== 'undefined' ? window.UI : globalThis.UI)?.on?.('settingsChanged', doRender);
     return () => {
       off?.();
+      offUiSettings?.();
       cleanup?.();
     };
   }
